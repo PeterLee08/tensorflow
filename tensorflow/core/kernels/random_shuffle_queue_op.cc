@@ -18,11 +18,13 @@ limitations under the License.
 #include <deque>
 #include <vector>
 
+#include "tensorflow/core/framework/node_def.pb.h"
 #include "tensorflow/core/framework/op_kernel.h"
 #include "tensorflow/core/framework/resource_mgr.h"
 #include "tensorflow/core/framework/tensor.h"
 #include "tensorflow/core/framework/tensor_shape.h"
 #include "tensorflow/core/framework/types.h"
+#include "tensorflow/core/kernels/batch_util.h"
 #include "tensorflow/core/kernels/queue_op.h"
 #include "tensorflow/core/kernels/typed_queue.h"
 #include "tensorflow/core/lib/core/errors.h"
@@ -169,7 +171,7 @@ Status RandomShuffleQueue::GetElementComponentFromBatch(
   TF_RETURN_IF_ERROR(ctx->allocate_persistent(
       tuple[component].dtype(), element_shape, out_tensor, &element_access));
   TF_RETURN_IF_ERROR(
-      CopySliceToElement(tuple[component], element_access, index));
+      batch_util::CopySliceToElement(tuple[component], element_access, index));
   return Status::OK();
 }
 
@@ -308,7 +310,13 @@ void RandomShuffleQueue::TryDequeueMany(int num_elements, OpKernelContext* ctx,
       // an optimized case where the queue 'knows' what attributes to
       // use, and plumbs them through here.
       Tensor element;
-      ctx->allocate_temp(component_dtypes_[i], ManyOutShape(i, 0), &element);
+      Status s = ctx->allocate_temp(component_dtypes_[i], ManyOutShape(i, 0),
+                                    &element);
+      if (!s.ok()) {
+        ctx->SetStatus(s);
+        callback(Tuple());
+        return;
+      }
       tuple.emplace_back(element);
     }
     callback(tuple);
@@ -352,7 +360,7 @@ void RandomShuffleQueue::TryDequeueMany(int num_elements, OpKernelContext* ctx,
                       }
                     }
                   }
-                  if (allow_small_batch && queues_[0].size() > 0) {
+                  if (allow_small_batch && !queues_[0].empty()) {
                     // Request all remaining elements in the queue.
                     queue_size = queues_[0].size();
                     attempt->tuple.clear();
@@ -387,8 +395,10 @@ void RandomShuffleQueue::TryDequeueMany(int num_elements, OpKernelContext* ctx,
                       const TensorShape shape =
                           ManyOutShape(i, attempt->elements_requested);
                       Tensor element;
-                      attempt->context->allocate_temp(component_dtypes_[i],
-                                                      shape, &element);
+                      attempt->context->SetStatus(
+                          attempt->context->allocate_temp(component_dtypes_[i],
+                                                          shape, &element));
+                      if (!attempt->context->status().ok()) return kComplete;
                       attempt->tuple.emplace_back(element);
                     }
                   }
@@ -398,8 +408,8 @@ void RandomShuffleQueue::TryDequeueMany(int num_elements, OpKernelContext* ctx,
                   const int index = attempt->tuple[0].dim_size(0) -
                                     attempt->elements_requested;
                   for (int i = 0; i < num_components(); ++i) {
-                    attempt->context->SetStatus(CopyElementToSlice(
-                        tuple[i], &attempt->tuple[i], index));
+                    attempt->context->SetStatus(batch_util::CopyElementToSlice(
+                        std::move(tuple[i]), &attempt->tuple[i], index));
                     if (!attempt->context->status().ok()) return kComplete;
                   }
                   tuple.clear();
@@ -425,7 +435,11 @@ void RandomShuffleQueue::TryDequeueMany(int num_elements, OpKernelContext* ctx,
 }
 
 Status RandomShuffleQueue::MatchesNodeDef(const NodeDef& node_def) {
-  TF_RETURN_IF_ERROR(MatchesNodeDefOp(node_def, "RandomShuffleQueue"));
+  if (!MatchesNodeDefOp(node_def, "RandomShuffleQueue").ok() &&
+      !MatchesNodeDefOp(node_def, "RandomShuffleQueueV2").ok()) {
+    return errors::InvalidArgument("Expected RandomShuffleQueue, found ",
+                                   node_def.op());
+  }
   TF_RETURN_IF_ERROR(MatchesNodeDefCapacity(node_def, capacity_));
 
   int32 min_after_dequeue = -1;
@@ -496,6 +510,8 @@ class RandomShuffleQueueOp : public TypedQueueOp {
 };
 
 REGISTER_KERNEL_BUILDER(Name("RandomShuffleQueue").Device(DEVICE_CPU),
+                        RandomShuffleQueueOp);
+REGISTER_KERNEL_BUILDER(Name("RandomShuffleQueueV2").Device(DEVICE_CPU),
                         RandomShuffleQueueOp);
 
 }  // namespace tensorflow

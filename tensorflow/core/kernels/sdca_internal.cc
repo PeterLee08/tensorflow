@@ -21,10 +21,10 @@ limitations under the License.
 #include <random>
 
 #include "third_party/eigen3/unsupported/Eigen/CXX11/Tensor"
+#include "tensorflow/core/lib/math/math_util.h"
 #include "tensorflow/core/lib/random/simple_philox.h"
 
 namespace tensorflow {
-
 namespace sdca {
 
 using UnalignedFloatVector = TTypes<const float>::UnalignedConstVec;
@@ -109,8 +109,8 @@ Status ModelWeights::Initialize(OpKernelContext* const context) {
 
   for (int i = 0; i < sparse_weights_inputs.size(); ++i) {
     Tensor* delta_t;
-    sparse_weights_outputs.allocate(i, sparse_weights_inputs[i].shape(),
-                                    &delta_t);
+    TF_RETURN_IF_ERROR(sparse_weights_outputs.allocate(
+        i, sparse_weights_inputs[i].shape(), &delta_t));
     // Convert the input vector to a row matrix in internal representation.
     auto deltas = delta_t->shaped<float, 2>({1, delta_t->NumElements()});
     deltas.setZero();
@@ -127,7 +127,8 @@ Status ModelWeights::Initialize(OpKernelContext* const context) {
       std::vector<FeatureWeightsDenseStorage>* const feature_weights) {
     for (int i = 0; i < weight_inputs.size(); ++i) {
       Tensor* delta_t;
-      weight_outputs->allocate(i, weight_inputs[i].shape(), &delta_t);
+      TF_RETURN_IF_ERROR(
+          weight_outputs->allocate(i, weight_inputs[i].shape(), &delta_t));
       // Convert the input vector to a row matrix in internal representation.
       auto deltas = delta_t->shaped<float, 2>({1, delta_t->NumElements()});
       deltas.setZero();
@@ -136,12 +137,11 @@ Status ModelWeights::Initialize(OpKernelContext* const context) {
                                          {1, weight_inputs[i].NumElements()}),
                                      deltas});
     }
+    return Status::OK();
   };
 
-  initialize_weights(dense_weights_inputs, &dense_weights_outputs,
-                    &dense_weights_);
-
-  return Status::OK();
+  return initialize_weights(dense_weights_inputs, &dense_weights_outputs,
+                            &dense_weights_);
 }
 
 // Computes the example statistics for given example, and model. Defined here
@@ -278,7 +278,7 @@ Status Examples::SampleAdaptativeProbabilities(
   int num_retries = 0;
   while (id < num_examples() && num_retries < num_examples()) {
     int picked_id = sampler.Sample(&random);
-    if (dis(gen) > std::pow(0.1, sampled_count_[picked_id])) {
+    if (dis(gen) > MathUtil::IPow(0.1, sampled_count_[picked_id])) {
       num_retries++;
       continue;
     }
@@ -520,5 +520,4 @@ void Examples::ComputeSquaredNormPerExample(
 }
 
 }  // namespace sdca
-
 }  // namespace tensorflow

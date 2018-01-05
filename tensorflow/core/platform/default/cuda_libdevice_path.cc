@@ -17,22 +17,16 @@ limitations under the License.
 
 #include <stdlib.h>
 
-#include "tensorflow/core/lib/strings/strcat.h"
-#include "tensorflow/core/platform/default/logging.h"
+#if !defined(PLATFORM_GOOGLE)
+#include "cuda/cuda_config.h"
+#endif
+#include "tensorflow/core/platform/logging.h"
 
 namespace tensorflow {
 
 string CudaRoot() {
-  // 'bazel test' sets TEST_SRCDIR.
-  const string kRelativeCudaRoot = "local_config_cuda/cuda";
-  const char* env = getenv("TEST_SRCDIR");
-  if (env && env[0] != '\0') {
-    return strings::StrCat(env, "/", kRelativeCudaRoot);
-  } else {
-    LOG(WARNING) << "TEST_SRCDIR environment variable not set: "
-                 << "using $PWD/" << kRelativeCudaRoot << "as the CUDA root.";
-    return kRelativeCudaRoot;
-  }
+  VLOG(3) << "CUDA root = " << TF_CUDA_TOOLKIT_PATH;
+  return TF_CUDA_TOOLKIT_PATH;
 }
 
 }  // namespace tensorflow
